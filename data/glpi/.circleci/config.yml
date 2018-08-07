@@ -1,0 +1,111 @@
+version: 2
+
+shared: &shared
+  steps:
+    - checkout
+    - run:
+        name: Dependencies
+        command: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client libpng-dev libxml2-dev
+          sudo docker-php-ext-install mysqli gd xmlrpc
+          sudo pecl install apcu <<< '' || sudo pecl install apcu-4.0.11 <<< ''
+          sudo docker-php-ext-enable apcu
+          echo "apc.enable=1" | sudo tee --append /usr/local/etc/php/conf.d/docker-php-ext-apcu.ini
+          echo "apc.enable_cli=1" | sudo tee --append /usr/local/etc/php/conf.d/docker-php-ext-apcu.ini
+          echo "memory_limit = 512M" | sudo tee --append /usr/local/etc/php/conf.d/docker-php-memory.ini
+    - run:
+        name: Composer
+        command: |
+          sudo composer self-update
+          sed -e '/"php":/d' -i composer.json
+          rm -f composer.lock
+          composer install --optimize-autoloader
+    - run:
+        name: Update DB
+        command: |
+          mysql -h 127.0.0.1 -u root -e 'create database glpitest0723;'
+          mysql -h 127.0.0.1 -u root glpitest0723 < tests/glpi-0.72.3-empty.sql
+          cp tests/circleci.config_db.php tests/config_db.php
+          php scripts/cliupdate.php --config-dir=../tests --dev
+          php scripts/cliupdate.php --config-dir=../tests --dev |grep -q "No migration needed." || (echo "scripts/cliupdate.php FAILED" && exit 1)
+          php scripts/innodb_migration.php --config-dir=../tests
+          rm tests/config_db.php
+    - run:
+        name: Install DB
+        command: |
+          mysql -h 127.0.0.1 -u root -e 'create database glpitest;'
+          php scripts/cliinstall.php --db=glpitest --host=127.0.0.1 --user=root --tests
+          php scripts/cliupdate.php --config-dir=../tests |grep -q "No migration needed." || (echo "scripts/cliupdate.php FAILED" && exit 1)
+          ./tests/test_fail_update.sh; git checkout install/update_92_93.php;
+    - run:
+        name: Database tests
+        command: composer testdb
+    - run:
+        name: Functionnal tests
+        command: composer testfunc
+    - run:
+        name: Unit tests
+        command: composer testunits
+    - run:
+        name: WEB tests
+        command: |
+          php -S localhost:8088 tests/router.php &>/dev/null &
+          composer testweb
+#    - run:
+#        name: LDAP tests
+#        command: |
+#          ./tests/LDAP/ldap_run.sh
+#          composer testldap
+    - run:
+        name: Coding standards
+        command: composer cs
+    - run:
+        name: sensiolabs/security-checker
+        command: vendor/bin/security-checker security:check
+jobs:
+  "php5.6":
+    <<: *shared
+    docker:
+      - image: circleci/php:5.6-fpm-node-browsers
+      - image: circleci/mariadb:10.1
+  "php7.0":
+    <<: *shared
+    docker:
+      - image: circleci/php:7.0-fpm-node-browsers
+      - image: circleci/mariadb:10.2
+  "php7.1":
+    <<: *shared
+    docker:
+      - image: circleci/php:7.1-fpm-node-browsers
+      - image: circleci/mariadb:10.3
+  "php7.2":
+    <<: *shared
+    docker:
+      - image: circleci/php:7.2-fpm-node-browsers
+      - image: circleci/mariadb:10.3
+  "phplatest":
+    <<: *shared
+    docker:
+      - image: circleci/php:latest-node-browsers
+      - image: circleci/mariadb:10.3
+
+
+workflows:
+  version: 2
+  tests_all:
+    jobs:
+      - php5.6
+      - php7.0
+      - php7.1
+      - php7.2
+  scheduled_build:
+    triggers:
+      - schedule:
+          cron: "0 0 * * *"
+          filters:
+            branches:
+              only:
+                - master
+    jobs:
+      - phplatest

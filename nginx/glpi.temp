@@ -1,0 +1,33 @@
+server {
+	listen ${NGINX_PORT};
+	server_name ${NGINX_SERVER_NAME};
+	error_log  /var/log/nginx/${NGINX_SERVER_NAME}-error.log;
+    access_log /var/log/nginx/${NGINX_SERVER_NAME}-access.log;
+	
+	root /code;
+	index index.php index.html;
+
+    location / {
+		root  /code;
+		index  index.html index.htm index.php;
+    }
+	
+	location /api {
+		rewrite ^/api/(.*)$ /apirest.php/$1 last;
+	}
+
+    error_page  500 502 503 504  /50x.html;
+    location = /50x.html {
+        root  /code;
+    }
+	
+	location ~ \.php$ {
+		include fastcgi_params;
+		fastcgi_pass php:9000;
+		fastcgi_index index.php;
+		fastcgi_param SERVER_NAME $host;
+		fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+		fastcgi_param PATH_INFO $fastcgi_script_name;
+	}
+
+}
